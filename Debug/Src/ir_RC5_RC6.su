@@ -1,0 +1,5 @@
+ir_RC5_RC6.c:13:5:getRClevel	32	static
+ir_RC5_RC6.c:61:6:sendRC5	16	static
+ir_RC5_RC6.c:87:9:decodeRC5	32	static
+ir_RC5_RC6.c:140:6:sendRC6	24	static
+ir_RC5_RC6.c:172:9:decodeRC6	32	static
