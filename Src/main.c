@@ -1,20 +1,5 @@
 /* USER CODE BEGIN Header */
 /**
- ******************************************************************************
- * @file           : main.c
- * @brief          : Main program body
- ******************************************************************************
- * @attention
- *
- * <h2><center>&copy; Copyright (c) 2019 STMicroelectronics.
- * All rights reserved.</center></h2>
- *
- * This software component is licensed by ST under BSD 3-Clause license,
- * the "License"; You may not use this file except in compliance with the
- * License. You may obtain a copy of the License at:
- *                        opensource.org/licenses/BSD-3-Clause
- *
- ******************************************************************************
  */
 /* USER CODE END Header */
 
@@ -30,27 +15,26 @@
 int numsc = 0;
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#define gesture_massive 3
 #define num_masters 6
 #define DOF 3
 #define sample_size 50
 int master[num_masters][DOF][sample_size];       //array to store master gesture
 int16_t temp_values[DOF][sample_size]; //array to store temp. values from take_reading function
 int16_t reading[DOF][sample_size];
-uint16_t devAddr = (0x50 << 1); // HAL expects address to be shifted one bit to the left
+uint16_t devAddr = (0x51 << 1); // HAL expects address to be shifted one bit to the left
 uint16_t memAddr = 0;
-uint8_t Menupos = 0;
+uint8_t Menupos = 0; // позиция текста в меню. по ней определяется так-же что я выбрал кнопками
 uint8_t Menupos2 = 0;
-uint8_t Start = 0;
+uint8_t Start = 0; // начало анализа "жеста". Без этого флага не читается акселерометр
+uint8_t debug = 0; // флаг дебаша. показывает координаты акселерометра. выбирается кнопкой
 HAL_StatusTypeDef status;
 volatile uint32_t *DWT_CONTROL = (uint32_t *)0xE0001000;
 volatile uint32_t *DWT_CYCCNT = (uint32_t *)0xE0001004;
 volatile uint32_t *DEMCR = (uint32_t *)0xE000EDFC;
 uint32_t Mcounter, count;
 uint32_t cod_but = 0;
-// Поскольку я всё делаю в суперцикле тактированием таймера а не делей, всёё делается вот этими флагами
-// по очереди, счётчики положения прямоу, вверх, вниз.
-//startmov - старт анализа(по переполнению 50), ждёт первого резкого движения, ждёт когда считает 50 циклов.
+//startmov - СЃС‚Р°СЂС‚ Р°РЅР°Р»РёР·Р°(РїРѕ РїРµСЂРµРїРѕР»РЅРµРЅРёСЋ 5debug0), Р¶РґС‘С‚ РїРµСЂРІРѕРіРѕ СЂРµР·РєРѕРіРѕ РґРІРёР¶РµРЅРёСЏ, Р¶РґС‘С‚ РєРѕРіРґР° СЃС‡РёС‚Р°РµС‚ 50 С†РёРєР»РѕРІ.
 
 uint8_t calcforw, calcdown, calcup, startmov, redywait, redyread,take_reading_master_guesture;
 /* USER CODE END Includes */
@@ -107,6 +91,8 @@ int8_t giro_step = 0;
 int TIM_Pulse = 0;
 int Giro_Pulse = 0;
 uint16_t Diod_Pulse = 0;
+uint16_t Diod_Pulse1 = 0;
+uint16_t Diod_Pulse2 = 0;
 unsigned long CODE_TO_SEND;
 unsigned long CODE_TO_REC;
 char trans_str[96] = { 0, };
@@ -121,7 +107,6 @@ int main(void) {
 	/* USER CODE BEGIN 1 */
 	/* USER CODE END 1 */
 	/* MCU Configuration--------------------------------- -----------------------*/
-
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
 
@@ -134,6 +119,10 @@ int main(void) {
 	HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_1);
 	HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_2);
 	HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_3);
+
+	TIM2->CCR1 = 5;
+	TIM2->CCR2 = 5;
+	TIM2->CCR3 = 5;
 
 	/* USER CODE BEGIN SysInit */
 
@@ -149,6 +138,9 @@ int main(void) {
 	ssd1306_SetCursor(2, 0);
 	ssd1306_WriteString("Start init mpu. ", Font_7x10, White);
 	ssd1306_UpdateScreen();
+	ssd1306_SetCursor(2,20 );
+	ssd1306_WriteString("STM32. ", Font_7x10, White);
+	ssd1306_UpdateScreen();
 	MPU6050_Init();
 	MPU6050_Calibrate();
 	MX_TIM4_Init();
@@ -162,57 +154,85 @@ int main(void) {
 	ssd1306_WriteString("Init MPU complit", Font_7x10, White);
 	ssd1306_UpdateScreen();
 	HAL_Delay(600);
-	my_enableIRIn();
-	HAL_TIM_Base_Start_IT(&htim1);
 
+	//Scan I2C
+	ssd1306_Fill(Black);
+	ssd1306_SetCursor(2, 0);
+	ssd1306_WriteString("Init I2C", Font_7x10, White);
+	ssd1306_UpdateScreen();
+	int8_t strlcd=9;
+	HAL_StatusTypeDef result;
+	for (i=1; i<128; i++)
+	 	{
+	 	  result = HAL_I2C_IsDeviceReady(&hi2c2, (uint16_t)(i<<1), 2, 2);
+	 	  if (result != HAL_OK) // HAL_ERROR or HAL_BUSY or HAL_TIMEOUT
+	 	  {
+	 		  printf("."); // No ACK received at that address
+	 	  }
+	 	  if (result == HAL_OK)
+	 	  {
+	 		 snprintf(trans_str, 20, "0x%X", i);
+
+	 		  	ssd1306_SetCursor(2, strlcd);
+	 		 	ssd1306_WriteString(trans_str, Font_7x10, White);
+	 		 	ssd1306_UpdateScreen();
+	 		 	strlcd=strlcd+9;
+	 	  }
+	 	}
+	HAL_Delay(1000);
+	HAL_TIM_Base_Start_IT(&htim1);
+	my_enableIRIn();
 	static char *decode_str[] = { "UNUSED", "UNKNOWN", "RC5", "RC6", "NEC",
 			"SONY", "PANASONIC", "JVC", "SAMSUNG", "WHYNTER", "AIWA_RC_T501",
 			"LG", "SANYO", "MITSUBISHI", "DISH", "SHARP", "DENON", "PRONTO" };
 	int16_t mpu6050data[6];
 	int calctime;
 	int calctime2;
-	// ШИМ-
+
 	Diod_Pulse=600;
 
 	calctime2 = 0;
 
 	 // enable the use DWT
 	*DEMCR = *DEMCR | 0x01000000;
-
 	// Reset cycle counter
 	*DWT_CYCCNT = 0;
-
 	// enable cycle counter
 	*DWT_CONTROL = *DWT_CONTROL | 1 ;
 
-	// читаем из ипрама в рам таблицы движений. что-бы оперативно их сравнивать. читать в полёте не выходит. долго
+	//
 	ssd1306_Fill(Black);
 			ssd1306_SetCursor(2, 0);
 			ssd1306_WriteString("Read master guesture from EEPROM", Font_7x10, White);
 			ssd1306_UpdateScreen();
+			HAL_Delay(500);
 	for (int i = 0; i < num_masters; i++) {
 		EEPROM_read(i);
-		Diod_Pulse+=200;
+		Diod_Pulse+=600;
 	}
-
-		Diod_Pulse=100;
+			Diod_Pulse=10;
 			ssd1306_Fill(Black);
 			ssd1306_SetCursor(2, 0);
 			ssd1306_WriteString("Init complite", Font_7x10, White);
 			ssd1306_UpdateScreen();
-	HAL_Delay(500);
+			HAL_Delay(500);
+
 	lcd_menu(1);
+
 	while (1) {
 
 		// модуль обработки нажатия кнопок. останется только на мастер палочке.
-		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_14) == GPIO_PIN_SET) {
+		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_14) == GPIO_PIN_RESET) {
 			lcd_menu(1);
 			HAL_Delay(50);
-		} else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_15) == GPIO_PIN_SET) {
+		} else if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_15) == GPIO_PIN_RESET) {
 			lcd_menu(2);
 			HAL_Delay(50);
 		}
+
+
 		if (Start == 1) {
+			//Читаем гироскоп
 			if (Giro_Pulse >= 3)
 				{
 				MPU6050_GetAllData(mpu6050data);
@@ -222,6 +242,7 @@ int main(void) {
 				Giro_Pulse = 0;
 				giro_step++;
 				}
+			//Приводим данные и пишим в массив
 			if (giro_step == 4) {
 				// получили усреднённое значение. Делю его на количество считываний и беру это зхначение в массив для сравнения
 				// работаю в этом условии, так как тут у нас актуальные фильтрованные данные по прерываниям, времени и.т.д
@@ -249,32 +270,70 @@ int main(void) {
 				giro_step = 0;
 				calctime++;
 				// 0.0016s read guesture 1
-				// этот кусочек для отладки
+
+				//Первый модуль - аркадный. Вгружает в палочку аркадные заклинания (4 шт)
+				// меняет под ним размер массива и значений.
+				// Читаем в память из епрома данные по аркадным жестам ( думаю всё просто   Л П В Н)
+				// и запускаем чтения жеста в лупе. без подготовки. каждое считывание сравниваем
+				// елси правильно помню то как раз 4 жеста успевает обработать за 1/50 секунду.
+
+				 if ((    ((temp_values[0][sample_size - 1] >= 50)&& (temp_values[0][sample_size - 1] <= 150))
+						& ((temp_values[1][sample_size - 1] >= 250)&& (temp_values[1][sample_size - 1] <= 350))
+						& ((temp_values[2][sample_size - 1] >= 100 )&& (temp_values[2][sample_size - 1] <= 200))))
+							//x  +- 100 //y  +-300 //z +-150
+						{
+					 	 	calctime=0;
+							calcforw++;
+							if (Diod_Pulse2<=6000)  {Diod_Pulse2+=100;} // мигаем неким цветом мол всё верно
+							if (calcforw >= 20) // ждём порядка 700 мc. это 35 тиков.
+							{
+								redywait = 1; // я знаю что палочка зависла выставляю флаг ждать жест. с первых резких движений - чтаем жест
+								if (Diod_Pulse2<=6000)
+								{Diod_Pulse2+=1000;}
+							}
+						}
+						else {
+							// тут нужно редусмотреть баг. мы можем поменять положение палочки, но жест уже ждётся
+							calcforw = 0;
+							Diod_Pulse2=0; } // Сбросили таймер //тут продолжим...
+
+
+
+
+
+
+
 				if (calctime >= 50) {
-						// флаг выставляется ниже, что мы готовы читать именно жест. тут мы просто считаем 50 считываний
-						// скидываем флаг redyread в ноль и ставим что можно читать жест. вуа-ля! ну порнуха же (
+				// флаг выставляется ниже, что мы готовы читать именно жест. тут мы просто считаем 50 считываний
+				// скидываем флаг redyread в ноль и ставим что можно читать жест. вуа-ля! ну порнуха же (
 					if (redyread >= 1)
 					{
-
+						//Если пишем жест для памяти - работает этот кусок. он обрубает чтение после
+						//первых 50 значений которые считали после первого резкого движения
 						if (take_reading_master_guesture>=1 )
-						{
+						{ // модуль читает жест для записи в память. после его чтения флаг работы скидывается и больше
+							//  с гироскопа данные не читаются
 							take_reading_master_guesture=0; //считали жест для памяти
 							Start=0;
 							redyread = 0;
-							count=*DWT_CYCCNT-Mcounter;
-							float op_time=count/72000000.0f;// count/F_CPU
-
+							ssd1306_Fill(Black);
+							ssd1306_SetCursor(3, 10);
+							ssd1306_WriteString("Read master gueture", Font_7x10, White);
+							ssd1306_SetCursor(3, 20);
+							ssd1306_WriteString("complite", Font_7x10, White);
+							ssd1306_UpdateScreen();
 						}
 						else
 						{
 							startmov = 1; // считали жест для анализа
-							redyread = 0;
+							redyread = 0; // Готов считать именно  жест а не набираю просто информацию
 						}
 					}
-					// отладка
-					/*
+					//кусое дебага. печатаем текущие данные гираскопа.
+					if (debug==1)
+					{
 					 ssd1306_Fill(Black);
-					 snprintf(trans_str, 20, "nom calc: %i\n", calctime2);
+					 snprintf(trans_str, 20, "nom calc: %i\n", calctime);
 					 ssd1306_SetCursor(0,0);
 					 ssd1306_WriteString(trans_str, Font_7x10, White);
 					 snprintf(trans_str, 96, "x:%d   %s\n",temp_values[0][48],"   ");
@@ -286,47 +345,43 @@ int main(void) {
 					 snprintf(trans_str, 96, "z:%d   %s\n",temp_values[2][48],"   ");
 					 ssd1306_SetCursor(0, 36);
 					 ssd1306_WriteString(trans_str, Font_7x10, White);
-					 ssd1306_UpdateScreen();*/
-					calctime2++;
+					 ssd1306_UpdateScreen();
+					}
 					calctime = 0;
-
 				}
-				// тут проверяем на 3 условия
-				// 1. мы замерли в горизонтальной плоскости паралельно полу. Это движение 1. для считывания с палочки заклинания комнаты
-				// тут самые сложные жесты. Подсказки на них будут в книгах.
-				// 2. мы замерли с паолчкой вверх перпендикулярно полу. движения 2. дуэльный клуб. Загружаем в палочку из памяти боевые жесты
-				// тут будут относительно сложные жесты. 6 жестов. 3 блока 3 атаки.
-				// 3. Палочка вниз перпендикулярно полу. движение 3. аркадный режим комнаты. для бития монстров
-				// самые простые жесты. но с реалтайм чтением. буквально сделаю 3-4 жеста. но что-бы можно было в реалтайме максимально быстро следить
 
-				// модуль первого условия. замерли горизонтально. и так стоим секунду. После этого взводим сигнал на готовность к заклинанию.
-				// после того как по любой координате прошло ускорение больше +-350 едениц (сделать переменную чувствительности?) начинаем чтение
-				// 50 координат. потом сразу после читаем, похоже это на то что есть в памяти ( 0.11 мс). если не оно, ждём чего нить дальше.
+				// мониторю положение палочки. если она в руке ровно  параллельно земле - включается модуль чтения заклинания
+				// Если палочка параллельно земле но вверх ногами -сигнал загрузить в мапять режим магии
 
-				if ((((temp_values[0][sample_size - 1] >= -100)&& (temp_values[0][sample_size - 1] <= 100))
+				// если указывает вверх - загрузить в память режим ДУЭЛЬ! )
+
+				// Дальше будет. если палочка опущени и указывает на землю - включается режим аркады.
+				// тут модуль работает если стоит флаг redyread.
+
+				 if ((((temp_values[0][sample_size - 1] >= -100)&& (temp_values[0][sample_size - 1] <= 100))
 				  & ((temp_values[1][sample_size - 1] >= -100)&& (temp_values[1][sample_size - 1] <= 100))
 				  & ((temp_values[2][sample_size - 1] >= -70 )&& (temp_values[2][sample_size - 1] <= 70)))
 				  &	(redyread==0))
 					//x  +-70 //y  +-100 //z +-50
 				{
 					calcforw++;
-					if (Diod_Pulse<=6000)
-					{Diod_Pulse+=60;}
-					if (calcforw >= 20)	// ждём порядка 700 мc. это 35 тиков.
+					if (Diod_Pulse<=6000)  {Diod_Pulse+=100;Diod_Pulse1+=100;} // мигаем неким цветом мол всё верно
+					if (calcforw >= 20) // ждём порядка 700 мc. это 35 тиков.
 					{
 						redywait = 1; // я знаю что палочка зависла выставляю флаг ждать жест. с первых резких движений - чтаем жест
 						if (Diod_Pulse<=6000)
-						{Diod_Pulse+=600;}
+						{Diod_Pulse+=1000;Diod_Pulse1+=1000;}
 					}
-				} else {
+				}
+				else {
+					// тут нужно редусмотреть баг. мы можем поменять положение палочки, но жест уже ждётся
 					calcforw = 0;
-					Diod_Pulse=0;
+					Diod_Pulse=0; Diod_Pulse1=0; } // Сбросили таймер //тут продолжим...
+			    }
 
-				} // Сбросили таймер
-				//тут продолжим...
-			}
-
-			// И вот тут НАКОНЕЦ мы выставляем флаг чтения жеста. выставляем его по любому резкому движению. первой резкой координате больще 150;
+			//вот тут НАКОНЕЦ мы выставляем флаг чтения жеста. выставляем его по любому резкому движению.
+			//первой резкой координате больще 150;
+			// этот модуль срабатывает если redywait=1
 			if (  ((temp_values[0][sample_size - 1] <= -150)|| (temp_values[0][sample_size - 1] >= 150))
 				& ((temp_values[1][sample_size - 1] <= -150)|| (temp_values[1][sample_size - 1] >= 150))
 				& ((temp_values[2][sample_size - 1] <= -150)|| (temp_values[2][sample_size - 1] >= 150))
@@ -335,8 +390,8 @@ int main(void) {
 			{
 				redyread = 1;
 				redywait = 0;
-				calctime = 0; // А это мой счётчик. он считает до 50 и выводит либо на экран, либо передаёт обработку на чтение
-				Mcounter=*DWT_CYCCNT;
+				calctime = 0;
+
 			}
 			if (startmov == 1) {
 				startmov = 0;
@@ -345,6 +400,7 @@ int main(void) {
 					DTW_score[i] = calc_DTW_score(i);
 					min_score = DTW_score[0];  //finding minimum of DTW_scores
 					//0,10s цикл длиться столько. буду считать это тактированием. сука, как долго ((((
+
 				}
 				for (i = 1; i < num_masters; i++) {
 					if (DTW_score[i] < min_score) {
@@ -357,26 +413,22 @@ int main(void) {
 
 							if (i==1)
 							{
-								cod_but = 0x11111110; // РєРѕРґ РєРЅРѕРїРєРё РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё
-								sendSAMSUNG(cod_but, 32); // РїСЂРѕС‚РѕРєРѕР» РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё, РєРѕРґ РєРЅРѕРїРєРё Рё РґР»РёРЅР° РїР°РєРµС‚Р° РІ Р±РёС‚Р°С… (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
+								cod_but = 0x11111110; // Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘
+								sendSAMSUNG(cod_but, 32); // Р С—РЎР‚Р С•РЎвЂљР С•Р С”Р С•Р В» Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘, Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С‘ Р Т‘Р В»Р С‘Р Р…Р В° Р С—Р В°Р С”Р ВµРЎвЂљР В° Р Р† Р В±Р С‘РЎвЂљР В°РЎвЂ¦ (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
 								my_enableIRIn();
-
 							}
 							else if (i==2)
 							{
-								cod_but = 0x11111101; // РєРѕРґ РєРЅРѕРїРєРё РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё
-								sendSAMSUNG(cod_but, 32); // РїСЂРѕС‚РѕРєРѕР» РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё, РєРѕРґ РєРЅРѕРїРєРё Рё РґР»РёРЅР° РїР°РєРµС‚Р° РІ Р±РёС‚Р°С… (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
+								cod_but = 0x11111101; // Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘
+								sendSAMSUNG(cod_but, 32); // Р С—РЎР‚Р С•РЎвЂљР С•Р С”Р С•Р В» Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘, Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С‘ Р Т‘Р В»Р С‘Р Р…Р В° Р С—Р В°Р С”Р ВµРЎвЂљР В° Р Р† Р В±Р С‘РЎвЂљР В°РЎвЂ¦ (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
 								my_enableIRIn();
-
-
 							}
 							else if (i==3)
 							{
-							cod_but = 0x11111011; // РєРѕРґ РєРЅРѕРїРєРё РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё
-							sendSAMSUNG(cod_but, 32); // РїСЂРѕС‚РѕРєРѕР» РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё, РєРѕРґ РєРЅРѕРїРєРё Рё РґР»РёРЅР° РїР°РєРµС‚Р° РІ Р±РёС‚Р°С… (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
+							cod_but = 0x11111011; // Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘
+							sendSAMSUNG(cod_but, 32); // Р С—РЎР‚Р С•РЎвЂљР С•Р С”Р С•Р В» Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘, Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С‘ Р Т‘Р В»Р С‘Р Р…Р В° Р С—Р В°Р С”Р ВµРЎвЂљР В° Р Р† Р В±Р С‘РЎвЂљР В°РЎвЂ¦ (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
 							my_enableIRIn();
 							}
-
 
 							snprintf(trans_str, 20, "nom matr:  %i\n", i);
 							ssd1306_Fill(Black);
@@ -391,9 +443,9 @@ int main(void) {
 			}
 		}
 
-		// модуль приёма ИК сигнала. сука очень важный и требовательный
+		// РјРѕРґСѓР»СЊ РїСЂРёС‘РјР° Р�Рљ СЃРёРіРЅР°Р»Р°. СЃСѓРєР° РѕС‡РµРЅСЊ РІР°Р¶РЅС‹Р№ Рё С‚СЂРµР±РѕРІР°С‚РµР»СЊРЅС‹Р№
 		if (my_decode(&results)) {
-			////////// РІС‹РІРѕРґ РґРµРєРѕРґРёСЂРѕРІР°РЅС‹С… РґР°РЅРЅС‹С… ///////////////
+			////////// Р Р†РЎвЂ№Р Р†Р С•Р Т‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…РЎвЂ№РЎвЂ¦ Р Т‘Р В°Р Р…Р Р…РЎвЂ№РЎвЂ¦ ///////////////
 			snprintf(trans_str, 96, "Cod: %p | Type: %s | Bits: %d\n",
 					(void*) results.value, decode_str[results.decode_type + 1],
 					results.bits);
@@ -404,11 +456,9 @@ int main(void) {
 			my_resume();
 			HAL_Delay(20);
 
-			//Модуль отправки ИК сигнала. ещё более важный и требовательный
-
-			cod_but = 0x11111111; // РєРѕРґ РєРЅРѕРїРєРё РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё
-			sendSAMSUNG(cod_but, 32); // РїСЂРѕС‚РѕРєРѕР» РїРѕР»СѓС‡РµРЅС‹Р№ РїСЂРё РґРµРєРѕРґРёСЂРѕРІР°РЅРёРё, РєРѕРґ РєРЅРѕРїРєРё Рё РґР»РёРЅР° РїР°РєРµС‚Р° РІ Р±РёС‚Р°С… (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
-			my_enableIRIn();
+			cod_but = 0x11111111; // Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘
+//			sendSAMSUNG(cod_but, 32); // Р С—РЎР‚Р С•РЎвЂљР С•Р С”Р С•Р В» Р С—Р С•Р В»РЎС“РЎвЂЎР ВµР Р…РЎвЂ№Р в„– Р С—РЎР‚Р С‘ Р Т‘Р ВµР С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р С‘, Р С”Р С•Р Т‘ Р С”Р Р…Р С•Р С—Р С”Р С‘ Р С‘ Р Т‘Р В»Р С‘Р Р…Р В° Р С—Р В°Р С”Р ВµРЎвЂљР В° Р Р† Р В±Р С‘РЎвЂљР В°РЎвЂ¦ (Cod: 0x707048b7 | Type: SAMSUNG | Bits: 32)
+//			my_enableIRIn();
 
 		}
 
@@ -422,9 +472,6 @@ int main(void) {
 }
 
 void lcd_menu(int key) { //copy readings from temp_values to selected master
-	//Menupos
-	// snprintf(trans_str, 20, "cyc: %i\n", cycles_count);
-	// Первая страница
 	int nm = -1;
 	if (Menupos == 0) {
 		ssd1306_Fill(Black);
@@ -440,7 +487,6 @@ void lcd_menu(int key) { //copy readings from temp_values to selected master
 		Menupos = 1;
 	}
 
-	//движение вперёд звёздочки
 	if (key == 1) {
 		ssd1306_SetCursor(0, Menupos2);
 		ssd1306_WriteString("*", Font_7x10, White);
@@ -472,11 +518,19 @@ void lcd_menu(int key) { //copy readings from temp_values to selected master
 		Menupos = 0;
 		Menupos2 = 0;
 	}
-	if ((key == 2) && (Menupos2 == 36))		    //пишем в память
+	if ((key == 2) && (Menupos2 == 36))		    //Пишем в память
 	{		    // надо получить номер матрицы
 		HAL_Delay(300);
-		while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_15) != GPIO_PIN_SET) {
-			if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_14) == GPIO_PIN_SET) {
+		while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_15) != GPIO_PIN_RESET) {
+			ssd1306_Fill(Black);
+			snprintf(trans_str, 20, "nom matr: %i\n", nm);
+			ssd1306_SetCursor(3, Menupos2);
+			ssd1306_WriteString("               ", Font_7x10, White);
+			ssd1306_SetCursor(3, Menupos2);
+			ssd1306_WriteString(trans_str, Font_7x10, White);
+			ssd1306_UpdateScreen();
+			HAL_Delay(20);
+			if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_14) == GPIO_PIN_RESET) {
 				nm++;
 				ssd1306_Fill(Black);
 				snprintf(trans_str, 20, "nom matr: %i\n", nm);
@@ -492,32 +546,21 @@ void lcd_menu(int key) { //copy readings from temp_values to selected master
 		Menupos2 = 0;
 
 	}
-	if ((key == 2) && (Menupos2 == 48))		    //читаем жест из памяти
+	if ((key == 2) && (Menupos2 == 48))		    //Анализируем что у нас сейчас твориться в суперцикле
 	{
 		HAL_Delay(300);
-		while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_15) != GPIO_PIN_SET) {
+		while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_15) != GPIO_PIN_RESET) {
 			HAL_Delay(30);
-			if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_14) == GPIO_PIN_SET) {
-				nm++;
-				ssd1306_Fill(Black);
-				snprintf(trans_str, 20, "nom matr: %i\n", nm);
-				ssd1306_SetCursor(3, Menupos2);
-				ssd1306_WriteString("               ", Font_7x10, White);
-				ssd1306_SetCursor(3, Menupos2);
-				ssd1306_WriteString(trans_str, Font_7x10, White);
-				ssd1306_UpdateScreen();
-				HAL_Delay(200);
-			}
+			ssd1306_Fill(Black);
+					ssd1306_SetCursor(3, Menupos2);
+					ssd1306_WriteString("Print axel", Font_7x10, White);
+					ssd1306_UpdateScreen();
+					debug=!debug;
 		}
 
-		EEPROM_read(nm);
-		ssd1306_Fill(Black);
-		ssd1306_SetCursor(3, 10);
-		ssd1306_WriteString("Read complyte !", Font_7x10, White);
-		ssd1306_UpdateScreen();
 		HAL_Delay(200);
 		Menupos = 0;
-		lcd_menu(1);
+
 		Menupos2 = 0;
 	}
 }
@@ -530,7 +573,7 @@ void EEPROM_write(int master_select) { //store master gestures in EEPROM of ardu
 	int16_t data;
 	int16_t temp1, temp2;
 	// master_select - номер массива в котором храниться жест/заклинание
-	addr = (master_select * sample_size * DOF) * 2; // умножаем на 2. потому что пишем по 2 бита ( 16 байт)
+	addr = (master_select * sample_size * DOF) * 2;
 
 	for (;;) { // wait...
 		status = HAL_I2C_IsDeviceReady(&hi2c2, devAddr, 1, HAL_MAX_DELAY);
@@ -540,7 +583,7 @@ void EEPROM_write(int master_select) { //store master gestures in EEPROM of ardu
 
 	for (int i = 0; i < DOF; i++) {
 		for (int j = 0; j < sample_size; j++) {
-			// тут как-то краво читается
+			// С‚СѓС‚ РєР°Рє-С‚Рѕ РєСЂР°РІРѕ С‡РёС‚Р°РµС‚СЃСЏ
 			// rebild fo byit
 			temp1 = (temp_values[i][j] & 0xFF);
 			temp2 = ((temp_values[i][j] >> 8) & 0xFFFF);
@@ -575,8 +618,8 @@ void EEPROM_write(int master_select) { //store master gestures in EEPROM of ardu
 
 			addr += 2;
 
-			// маленькая проверка памяти
-			// тут мы пробуем систему записи в еепром. пищем по 2 бита в массив. читаем так-же. по 2 бита. адрес сразу щёлкаем на 2 вперёд
+			// РјР°Р»РµРЅСЊРєР°СЏ РїСЂРѕРІРµСЂРєР° РїР°РјСЏС‚Рё
+			// С‚СѓС‚ РјС‹ РїСЂРѕР±СѓРµРј СЃРёСЃС‚РµРјСѓ Р·Р°РїРёСЃРё РІ РµРµРїСЂРѕРј. РїРёС‰РµРј РїРѕ 2 Р±РёС‚Р° РІ РјР°СЃСЃРёРІ. С‡РёС‚Р°РµРј С‚Р°Рє-Р¶Рµ. РїРѕ 2 Р±РёС‚Р°. Р°РґСЂРµСЃ СЃСЂР°Р·Сѓ С‰С‘Р»РєР°РµРј РЅР° 2 РІРїРµСЂС‘Рґ
 		}
 	}
 	HAL_Delay(200);
@@ -704,6 +747,7 @@ void TIM1_UP_IRQHandler(void) {
 	TIM_Pulse++;
 	Giro_Pulse++;
 	TIM2->CCR1 = Diod_Pulse;
+	TIM2->CCR3 = Diod_Pulse1;
 		//TIM2->CCR2 = 666;
 	/* USER CODE END WHILE */
 
@@ -745,17 +789,17 @@ void MPU6050_Init(void) {
 
 	uint8_t buffer[7];
 
-	// включение/побудка модуля
+	// РІРєР»СЋС‡РµРЅРёРµ/РїРѕР±СѓРґРєР° РјРѕРґСѓР»СЏ
 	buffer[0] = MPU6050_RA_PWR_MGMT_1;
 	buffer[1] = 0x00;
 	I2C_WriteBuffer(MPU6050_ADDRESS_AD0_LOW, buffer, 2);
 
-	// конфиг гироскопа на ±500°/с
+	// РєРѕРЅС„РёРі РіРёСЂРѕСЃРєРѕРїР° РЅР° В±500В°/СЃ
 	buffer[0] = MPU6050_RA_GYRO_CONFIG;
 	buffer[1] = 0x8;
 	I2C_WriteBuffer(MPU6050_ADDRESS_AD0_LOW, buffer, 2);
 
-	// конфиг акселерометра на ±8g
+	// РєРѕРЅС„РёРі Р°РєСЃРµР»РµСЂРѕРјРµС‚СЂР° РЅР° В±8g
 	buffer[0] = MPU6050_RA_ACCEL_CONFIG;
 	buffer[1] = 0x10;
 	I2C_WriteBuffer(MPU6050_ADDRESS_AD0_LOW, buffer, 2);
@@ -770,7 +814,7 @@ void MPU6050_Calibrate(void) {
 		fAX_Cal += mpu6050data[0];
 		fAY_Cal += mpu6050data[1];
 		fAZ_Cal += mpu6050data[2];
-		HAL_Delay(3); // 3 сек на калибровку
+		HAL_Delay(3); // 3 СЃРµРє РЅР° РєР°Р»РёР±СЂРѕРІРєСѓ
 	}
 	fAX_Cal /= iNumCM;
 	fAY_Cal /= iNumCM;
@@ -782,18 +826,18 @@ void MPU6050_GetAllData(int16_t *Data) {
 
 	uint8_t accelbuffer[14];
 
-	// с 0x3B 14 следующих регистров содержат данные измерения модуля
+	// СЃ 0x3B 14 СЃР»РµРґСѓСЋС‰РёС… СЂРµРіРёСЃС‚СЂРѕРІ СЃРѕРґРµСЂР¶Р°С‚ РґР°РЅРЅС‹Рµ РёР·РјРµСЂРµРЅРёСЏ РјРѕРґСѓР»СЏ
 	I2C_ReadBuffer(MPU6050_ADDRESS_AD0_LOW, MPU6050_RA_ACCEL_XOUT_H,
 			accelbuffer, 14);
 
-	/* Registers 59 to 64 – Accelerometer Measurements */
+	/* Registers 59 to 64 вЂ“ Accelerometer Measurements */
 	for (int i = 0; i < 3; i++)
 		Data[i] = (((int16_t) ((uint16_t) accelbuffer[2 * i] << 8)
 				+ accelbuffer[2 * i + 1])) / 10;
 
-	/* Registers 65 and 66 – Temperature Measurement */
-	//пока пропускаем Temperature in degrees C = (TEMP_OUT Register Value as a signed quantity)/340 + 36.53
-	/* Registers 67 to 72 – Gyroscope Measurements */
+	/* Registers 65 and 66 вЂ“ Temperature Measurement */
+	//РїРѕРєР° РїСЂРѕРїСѓСЃРєР°РµРј Temperature in degrees C = (TEMP_OUT Register Value as a signed quantity)/340 + 36.53
+	/* Registers 67 to 72 вЂ“ Gyroscope Measurements */
 	for (int i = 4; i < 7; i++)
 		Data[i - 1] = ((int16_t) ((uint16_t) accelbuffer[2 * i] << 8)
 				+ accelbuffer[2 * i + 1]);
@@ -803,39 +847,39 @@ void MPU6050_GetAllData(int16_t *Data) {
 void IMU_CalculateAll_Data(void) {
 
 	int16_t mpu6050data[6];
-	// РїРµСЂРµРјРµС‰Р°РµРј РІ РјР°СЃСЃРёРІ mpu6050data РІСЃРµ РґР°РЅРЅС‹Рµ СЃ РґР°С‚С‡РёРєР°
+	// Р С—Р ВµРЎР‚Р ВµР С�Р ВµРЎвЂ°Р В°Р ВµР С� Р Р† Р С�Р В°РЎРѓРЎРѓР С‘Р Р† mpu6050data Р Р†РЎРѓР Вµ Р Т‘Р В°Р Р…Р Р…РЎвЂ№Р Вµ РЎРѓ Р Т‘Р В°РЎвЂљРЎвЂЎР С‘Р С”Р В°
 	MPU6050_GetAllData(mpu6050data);
 
 	// char msg[40];
 	// uint16_t len = sprintf(msg, "X:%i Y:%i Z:%i\r\n",(int16_t)(mpu6050data[3]- fGX_Cal), (int16_t)(mpu6050data[4]- fGY_Cal), (int16_t)(mpu6050data[5] - fGZ_Cal));
 	// HAL_UART_Transmit(&huart1, (uint8_t*) msg, len, HAL_MAX_DELAY);
 
-	// Р РђР‘РћРўРђ РЎ Р“Р�Р РћРЎРљРћРџРћРњ
-	//РєР°Рє РїРµСЂРµРІРµСЃС‚Рё Р®РЅРёС‚С‹ РІ СЂРµР°Р»СЊРЅС‹Рµ РіСЂР°РґСѓСЃС‹ СЂР°Р·РІРµСЂРЅСѓС‚Рѕ РЅР° РїСЂРёРјРµСЂРµ Roll
-	float Roll = mpu6050data[3] - fGX_Cal; // РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ "РЅСѓР»СЏ"
+	// Р В Р С’Р вЂ�Р С›Р СћР С’ Р РЋ Р вЂњР пїЅР В Р С›Р РЋР С™Р С›Р СџР С›Р Сљ
+	//Р С”Р В°Р С” Р С—Р ВµРЎР‚Р ВµР Р†Р ВµРЎРѓРЎвЂљР С‘ Р В®Р Р…Р С‘РЎвЂљРЎвЂ№ Р Р† РЎР‚Р ВµР В°Р В»РЎРЉР Р…РЎвЂ№Р Вµ Р С–РЎР‚Р В°Р Т‘РЎС“РЎРѓРЎвЂ№ РЎР‚Р В°Р В·Р Р†Р ВµРЎР‚Р Р…РЎС“РЎвЂљР С• Р Р…Р В° Р С—РЎР‚Р С‘Р С�Р ВµРЎР‚Р Вµ Roll
+	float Roll = mpu6050data[3] - fGX_Cal; // Р С•РЎвЂљР Р…Р С•РЎРѓР С‘РЎвЂљР ВµР В»РЎРЉР Р…Р С• "Р Р…РЎС“Р В»РЎРЏ"
 	Roll = Roll / 65.5 / 50;
 	MPU6050_Data.aRoll += Roll;
 
-	//СЃРѕРєСЂР°С‰РµРЅРЅР°СЏ Р·Р°РїРёСЃСЊ РґР»СЏ Pitch
+	//РЎРѓР С•Р С”РЎР‚Р В°РЎвЂ°Р ВµР Р…Р Р…Р В°РЎРЏ Р В·Р В°Р С—Р С‘РЎРѓРЎРЉ Р Т‘Р В»РЎРЏ Pitch
 	MPU6050_Data.aPitch += (mpu6050data[4] - fGY_Cal) / 65.5 / 50;
 
 	float Yaw = (mpu6050data[5] - fGZ_Cal) / 65.5 / 50;
 	MPU6050_Data.aYaw += Yaw;
-	//СѓС‡РёС‚С‹РІР°РµРј РїР°СЂР°РјРµС‚СЂ РїРѕ Z РµСЃР»Рё РїРѕ РЅРµРјСѓ РµСЃС‚СЊ РґРІРёР¶РµРЅРёРµ
+	//РЎС“РЎвЂЎР С‘РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С� Р С—Р В°РЎР‚Р В°Р С�Р ВµРЎвЂљРЎР‚ Р С—Р С• Z Р ВµРЎРѓР В»Р С‘ Р С—Р С• Р Р…Р ВµР С�РЎС“ Р ВµРЎРѓРЎвЂљРЎРЉ Р Т‘Р Р†Р С‘Р В¶Р ВµР Р…Р С‘Р Вµ
 	if (abs(Yaw) > 1) {
 		float _Y = sin(Yaw * 3.1415 / 180);
 		MPU6050_Data.aPitch += MPU6050_Data.aRoll * _Y;
 		MPU6050_Data.aRoll -= MPU6050_Data.aPitch * _Y;
 	}
 
-	// Р РђР‘РћРўРђ РЎ РђРљРЎР•Р›Р•Р РћРњР•РўР РћРњ
+	// Р В Р С’Р вЂ�Р С›Р СћР С’ Р РЋ Р С’Р С™Р РЋР вЂўР вЂєР вЂўР В Р С›Р СљР вЂўР СћР В Р С›Р Сљ
 	float roll4macc = atan2(mpu6050data[1],
 			(sqrt( SQR(mpu6050data[0]) + SQR(mpu6050data[2])))) * R2DEG;
 	float pitch4macc = atan2(mpu6050data[0],
 			(sqrt(SQR(mpu6050data[1]) + SQR(mpu6050data[2])))) * R2DEG;
 
-	// РєРѕСЂСЂРµРєС†РёСЏ РґСЂРµР№С„Р° РЅСѓР»СЏ РіРёСЂРѕСЃРєРѕРїР°
-	// Р”Р»СЏ РєРѕСЂСЂРµРєС‚РёСЂРѕРІРєРё СѓРіР»РѕРІ РІРѕСЃРїРѕР»СЊР·СѓРµРјСЃСЏ РєРѕРјРїР»РµРјРµРЅС‚Р°СЂРЅС‹Рј С„РёР»СЊС‚СЂРѕРј
+	// Р С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂ Р С‘РЎРЏ Р Т‘РЎР‚Р ВµР в„–РЎвЂћР В° Р Р…РЎС“Р В»РЎРЏ Р С–Р С‘РЎР‚Р С•РЎРѓР С”Р С•Р С—Р В°
+	// Р вЂќР В»РЎРЏ Р С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР С‘РЎР‚Р С•Р Р†Р С”Р С‘ РЎС“Р С–Р В»Р С•Р Р† Р Р†Р С•РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµР С�РЎРѓРЎРЏ Р С”Р С•Р С�Р С—Р В»Р ВµР С�Р ВµР Р…РЎвЂљР В°РЎР‚Р Р…РЎвЂ№Р С� РЎвЂћР С‘Р В»РЎРЉРЎвЂљРЎР‚Р С•Р С�
 	// A = (1-K)*Ag + K*Ac
 	MPU6050_Data.aPitch = MPU6050_Data.aPitch
 			* (1 - MPU6050_KOEF_COMPL)+ pitch4macc * MPU6050_KOEF_COMPL;
@@ -983,7 +1027,7 @@ static void MX_TIM2_Init(void) {
 	}
 	sConfigOC.OCMode = TIM_OCMODE_PWM1;
 	sConfigOC.Pulse = 30000;
-	sConfigOC.OCPolarity = TIM_OCPOLARITY_LOW;
+	sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
 	sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
 	if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1)
 			!= HAL_OK) {
@@ -1081,13 +1125,13 @@ static void MX_GPIO_Init(void) {
 	/*Configure GPIO pin : PC14 */
 	GPIO_InitStruct.Pin = GPIO_PIN_14;
 	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Pull = GPIO_PULLUP;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
 	/*Configure GPIO pin : PC14 */
 	GPIO_InitStruct.Pin = GPIO_PIN_15;
 	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Pull = GPIO_PULLUP;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
 	/*Configure GPIO pin : recive_IR_Pin */
