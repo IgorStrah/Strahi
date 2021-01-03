@@ -22,7 +22,7 @@
 void sendSAMSUNG(unsigned long data,  int nbits)
 {
 	// Set IR carrier frequency
-	enableIROut(38);
+	enableIROut(36);
 
 	// Header
 	mark(SAMSUNG_HDR_MARK);
